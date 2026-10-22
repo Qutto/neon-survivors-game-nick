@@ -83,7 +83,7 @@ const ICE_TS = 1.6;
 const HIVE_TS = 1.7;
 const HOME_WAVES: Wave[] = [
   ...remap(WAVES, {}, 1, 1, 450, HOME_TS),
-  { t: 300, min: 45, interval: 0.95, batch: 3, pool: [["trooper", 2], ["swarm", 4], ["phantom", 1]] },
+  { t: 300, min: 45, interval: 0.95, batch: 3, pool: [["trooper", 2], ["swarm", 4], ["phantom", 1], ["mech", 1.2], ["brute", 0.4]] },
 ];
 const HOME_EVENTS: GameEvent[] = ([
   ...elites(30, 300, 45, [150]),

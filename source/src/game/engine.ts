@@ -37,6 +37,10 @@ import {
   type PassiveModel,
   BOSS_SPAWN_EXTRA,
   ENEMIES,
+  ENEMY_REF_HIT,
+  ENEMY_CLASSES,
+  FAST_RECOIL,
+  ELITE,
   MEDKIT_EVERY,
   MEDKIT_MAX_STOCK,
   RARE_DROP_EVERY,
@@ -497,6 +501,8 @@ interface Eff {
 const CELL = 64;
 const BIG_R = 32;
 const MAX_ENEMIES = 460;
+// рои-«пролёты» летят по прямой: скорость ограничена, чтобы пролёт читался (быстрые классы иначе проносятся за кадр)
+const RUSH_SPEED_CAP = 150;
 const MAX_ENEMIES_ENDLESS = 560;
 const BASE_HEAL = 3; // купол Нео-Терры чинит в секунду (было 10)
 const MAX_PARTICLES = 700;
@@ -1115,9 +1121,8 @@ export class Engine {
         this.showBanner(`УГРОЗА ${lvl}`, `Враги крепче ×${Math.pow(ENDLESS_HP_STEP, lvl).toFixed(1)}, урон ×${Math.pow(ENDLESS_DMG_STEP, lvl).toFixed(1)} · награды ×${this.endlessMul().toFixed(2)}`, "#f43f5e", 2.2);
         audio.play("boss");
         // каждая ступень — ещё и элитка
-        const wave = this.currentWave();
         const [x, y] = this.spawnPos();
-        this.spawnEnemy(this.pickFromPool(wave.pool), x, y, true);
+        this.spawnEnemy(this.pickEliteBase(), x, y, true);
       }
       this.endlessBossT -= dt;
       if (this.endlessBossT <= 0) {
@@ -1370,6 +1375,17 @@ export class Engine {
     return Math.min(this.endless ? MAX_ENEMIES_ENDLESS : MAX_ENEMIES, Math.round(cap));
   }
 
+  // облик элитки — средний или тяжёлый враг текущей волны (рой и камикадзе элитками не бывают)
+  private pickEliteBase(): string {
+    const pool = this.currentWave().pool.filter(([id]) => {
+      const d = ENEMIES[id];
+      return d && (d.cls === "mid" || d.cls === "heavy") && d.kind !== "kamikaze";
+    });
+    if (pool.length) return this.pickFromPool(pool);
+    const any = this.currentWave().pool.find(([id]) => ENEMIES[id]?.cls === "mid");
+    return any ? any[0] : this.pickFromPool(this.currentWave().pool);
+  }
+
   private spawnEnemy(id: string, x: number, y: number, elite = false, bossHpMul = 1, force = false): Enemy | null {
     const def = ENEMIES[id];
     const isBoss = def.kind === "boss";
@@ -1377,6 +1393,7 @@ export class Engine {
     // рост врагов идёт по «старому» времени 15-минутного забега — 5 минут проходят ту же кривую сложности быстрее
     const t = this.scaledTime();
     let hp = isBoss ? def.hp * this.planet.bossHpMul * bossHpMul : def.hp * (1 + t / 150 + (t / 600) ** 2) * this.planet.hpMul;
+    if (def.cls) hp *= 1 + t * ENEMY_CLASSES[def.cls].grow;
     let dmg = def.damage * (1 + t / 360) * this.planet.dmgMul;
     // бесконечный режим: каждая ступень угрозы делает новых врагов крепче и злее
     if (this.endless && def.kind !== "crate") {
@@ -1388,12 +1405,15 @@ export class Engine {
     let xp = def.xp;
     let scale = 1;
     if (elite) {
-      hp *= Math.max(5, 14 - def.hp / 25);
-      dmg *= 1.4;
-      speed *= 0.9;
-      radius *= 1.6;
-      scale = 1.6;
-      xp = def.xp * 12 + 10;
+      // элитка — свой слой поверх облика: здоровье, урон и скорость не зависят от того, чей рисунок она взяла
+      hp = ENEMY_REF_HIT * ELITE.hits * (1 + t / 150 + (t / 600) ** 2) * (1 + t * ELITE.grow) * (0.5 + 0.5 * Math.min(1, t / ELITE.rampT)) * this.planet.hpMul;
+      if (this.endless) hp *= Math.pow(ENDLESS_HP_STEP, this.endlessLevel);
+      dmg = ELITE.damage * (1 + t / 360) * this.planet.dmgMul;
+      if (this.endless) dmg *= Math.pow(ENDLESS_DMG_STEP, this.endlessLevel);
+      speed = PLAYER_BASE_SPEED * ELITE.speed * (1 + t / 1800);
+      scale = Math.max(ELITE.radiusMul, ELITE.radiusMin / def.radius);
+      radius = def.radius * scale;
+      xp = ELITE.xp + def.xp * 4;
     }
     if (def.kind === "crate") {
       hp = 1;
@@ -1436,7 +1456,7 @@ export class Engine {
       hitUntil: [0, 0, 0, 0, 0, 0, 0, 0],
       attackCd: 0,
       t: rand(1, 2.5),
-      t2: 4,
+      t2: elite ? rand(ELITE.lungeEvery[0], ELITE.lungeEvery[1]) * 0.6 : 4,
       t3: isBoss ? 3 : 0,
       spin: 0,
       charge: 0,
@@ -1462,8 +1482,7 @@ export class Engine {
     const p = this.player;
     switch (ev.type) {
       case "elite": {
-        const wave = this.currentWave();
-        const eliteId = this.pickFromPool(wave.pool);
+        const eliteId = this.pickEliteBase();
         const [x, y] = this.spawnPos();
         const el = this.spawnEnemy(eliteId, x, y, true);
         if (el?.voidy) this.showBanner("ПУСТОТНЫЙ ЭЛИТНЫЙ ВРАГ", "Оставляет медленные войд-зоны — не стой в них", "#c084fc", 2.6);
@@ -1495,8 +1514,8 @@ export class Engine {
           const e = this.spawnEnemy(ev.enemy || "drone", sx - diry * off - dirx * back, sy + dirx * off - diry * back);
           if (e) {
             e.rush = true;
-            e.rvx = dirx * e.speed * 2.2;
-            e.rvy = diry * e.speed * 2.2;
+            e.rvx = dirx * Math.min(e.speed, RUSH_SPEED_CAP) * 2.2;
+            e.rvy = diry * Math.min(e.speed, RUSH_SPEED_CAP) * 2.2;
             e.rushLife = 9;
           }
         }
@@ -3279,7 +3298,9 @@ export class Engine {
       if (!frozen && e.stun <= 0) {
         const slowMul = e.slow > 0 ? 1 - e.slowAmt : 1;
         const sp = e.speed * slowMul * (!e.boss && this.inBase(e.x, e.y) ? 0.45 : 1);
-        if (e.rush) {
+        if (e.elite && !e.boss && !e.rush && this.updateEliteLunge(e, dist, dx, dy, dt, slowMul)) {
+          // замах или рывок элитки — обычное движение пропускаем
+        } else if (e.rush) {
           e.x += e.rvx * dt * slowMul;
           e.y += e.rvy * dt * slowMul;
           e.rushLife -= dt;
@@ -3325,10 +3346,47 @@ export class Engine {
       if (e.attackCd <= 0) {
         const rr = e.radius * 0.9 + p.r;
         // касание босса слабее: его угроза — зоны и рывки, а не таран (столп 03)
-        if (d2 < rr * rr && this.hurtPlayer(e.boss && e.dashing <= 0 ? e.damage * BOSS_CONTACT_MUL : e.damage)) e.attackCd = 0.8;
+        if (d2 < rr * rr && this.hurtPlayer(e.boss && e.dashing <= 0 ? e.damage * BOSS_CONTACT_MUL : e.damage)) {
+          e.attackCd = 0.8;
+          if (e.def.cls === "heavy" || e.elite) this.addShake(8);
+          // быстрые бьют наскоком: укусил — отскочил, заходит снова. Рой жалит, а не облепляет намертво
+          if (e.def.cls === "fast" && !e.elite) {
+            const d = Math.sqrt(d2) || 1;
+            e.kx -= (dx / d) * FAST_RECOIL;
+            e.ky -= (dy / d) * FAST_RECOIL;
+          }
+        }
       }
     }
     this.separate();
+  }
+
+  // Рывок элитки: замах (линия на земле в зафиксированном направлении) → короткий рывок. Уйти с линии = позиционка.
+  private updateEliteLunge(e: Enemy, dist: number, dx: number, dy: number, dt: number, slowMul: number): boolean {
+    if (e.dashing > 0) {
+      e.dashing -= dt;
+      const k = ELITE.lungeSpeed * slowMul;
+      e.x += e.dvx * k * dt;
+      e.y += e.dvy * k * dt;
+      if (Math.random() < 0.5) this.particle(e.x, e.y, rand(-50, 50), rand(-50, 50), 0.35, 3, e.def.color);
+      return true;
+    }
+    if (e.charge > 0) {
+      e.charge -= dt;
+      if (e.charge <= 0) e.dashing = ELITE.lungeTime;
+      return true;
+    }
+    e.t2 -= dt;
+    if (e.t2 <= 0 && dist < ELITE.lungeRange && e.def.kind !== "gunner") {
+      e.t2 = rand(ELITE.lungeEvery[0], ELITE.lungeEvery[1]);
+      e.charge = ELITE.lungeWindup;
+      // направление фиксируется в начале замаха — линия честно показывает, куда полетит
+      e.dvx = (dx / dist) * e.speed;
+      e.dvy = (dy / dist) * e.speed;
+      audio.play("warp");
+      return true;
+    }
+    return false;
   }
 
   private aiGunner(e: Enemy, dx: number, dy: number, dist: number, sp: number, dt: number) {
@@ -3349,7 +3407,8 @@ export class Engine {
       // пули редкие и медленные (столп 03)
       e.t = rand(GUNNER_FIRE_EVERY[0], GUNNER_FIRE_EVERY[1]);
       const a = Math.atan2(dy, dx);
-      if (e.elite) for (let k = -1; k <= 1; k += 2) this.enemyShoot(e.x, e.y, a + k * 0.18, 200, e.damage, "#ff4d6d");
+      // урон элитки рассчитан на касание и рывок; её пули — вдвое слабее (пули и так ×BULLET_DMG_MUL)
+      if (e.elite) for (let k = -1; k <= 1; k += 2) this.enemyShoot(e.x, e.y, a + k * 0.18, 200, e.damage * 0.5, "#ff4d6d");
       else this.enemyShoot(e.x, e.y, a, 190, e.damage, "#ff4d6d");
     }
   }
@@ -5092,6 +5151,29 @@ export class Engine {
       const bob = kind === "crate" ? 0 : Math.sin(e.anim * 6 + e.id) * 1.2;
       let scale = e.scale;
       if (kind === "kamikaze") scale *= 1 + Math.sin(e.anim * 14) * 0.08;
+      // читаемость классов: быстрые — со шлейфом, тяжёлые — с тенью и бронекольцом
+      if (!e.elite && e.def.cls === "fast" && !frozen) {
+        const back = e.face + Math.PI;
+        const len = e.radius * 2.6;
+        ctx.strokeStyle = hexToRgba(e.def.color, 0.32);
+        ctx.lineWidth = e.radius * 0.9;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y);
+        ctx.lineTo(e.x + Math.cos(back) * len, e.y + Math.sin(back) * len);
+        ctx.stroke();
+        ctx.lineCap = "butt";
+      } else if (!e.elite && e.def.cls === "heavy") {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.beginPath();
+        ctx.ellipse(e.x, e.y + e.radius * 0.75, e.radius * 1.05, e.radius * 0.38, 0, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = hexToRgba(e.def.color, 0.55);
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.radius + 3, 0, TAU);
+        ctx.stroke();
+      }
       if (e.elite) {
         ctx.strokeStyle = e.voidy ? "rgba(192,132,252,0.8)" : "rgba(250,204,21,0.75)";
         ctx.lineWidth = 2;
@@ -5128,6 +5210,20 @@ export class Engine {
           ctx.stroke();
           ctx.setLineDash([]);
         }
+      }
+      if (e.elite && !e.boss && e.charge > 0) {
+        // замах элитки: линия рывка в зафиксированном направлении
+        const len = Math.hypot(e.dvx, e.dvy) * ELITE.lungeSpeed * ELITE.lungeTime + e.radius;
+        const ang = Math.atan2(e.dvy, e.dvx);
+        const k = 1 - e.charge / ELITE.lungeWindup;
+        ctx.strokeStyle = `rgba(251,191,36,${0.35 + 0.5 * k})`;
+        ctx.lineWidth = e.radius * 1.4;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y);
+        ctx.lineTo(e.x + Math.cos(ang) * len, e.y + Math.sin(ang) * len);
+        ctx.stroke();
+        ctx.lineCap = "butt";
       }
       let alpha = 1;
       if (kind === "phantom") alpha = 0.55 + Math.sin(e.anim * 5 + e.id) * 0.3;

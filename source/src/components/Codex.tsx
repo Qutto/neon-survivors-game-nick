@@ -1,7 +1,7 @@
 // База данных: оружие, эволюции, модули, враги
 import { useState } from "react";
 import { ArrowRight, ChevronLeft, Lightbulb, Plus } from "lucide-react";
-import { BASE_WEAPON_IDS, CHARACTERS, ENEMIES, PASSIVES, PASSIVE_IDS, MAX_WEAPON_MODS, RULE_PERKS, WEAPONS, WEAPON_MODS, WEAPON_ROLES } from "../game/data";
+import { BASE_WEAPON_IDS, CHARACTERS, ENEMIES, ENEMY_CLASSES, PASSIVES, PASSIVE_IDS, MAX_WEAPON_MODS, RULE_PERKS, WEAPONS, WEAPON_MODS, WEAPON_ROLES } from "../game/data";
 import type { SaveData } from "../game/save";
 import { EnemyPreview, ItemIcon, NeonButton, Panel } from "./ui";
 import { cn } from "../utils/cn";
@@ -185,6 +185,7 @@ export function Codex({ save, onBack }: { save: SaveData; onBack: () => void }) 
                 <div className="min-w-0">
                   <div className="font-display text-sm" style={{ color: e.color }}>
                     {e.name} {e.kind === "boss" && <span className="ml-1 rounded bg-rose-500/20 px-1.5 text-[10px] text-rose-300">БОСС</span>}
+                    {e.cls && <span className="ml-1 rounded bg-slate-500/20 px-1.5 text-[10px] text-slate-300">{ENEMY_CLASSES[e.cls].name}</span>}
                   </div>
                   <div className="mt-1 grid grid-cols-3 gap-2 text-[11px] text-slate-400">
                     <span>

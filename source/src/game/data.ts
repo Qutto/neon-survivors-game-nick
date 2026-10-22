@@ -736,6 +736,49 @@ export const SLOT_DMG_MUL = 1.3;
 // ------------------------------------------------------------
 export type EnemyKind = "chaser" | "gunner" | "kamikaze" | "phantom" | "boss" | "crate" | "nest";
 
+// Классы врагов (неделя врагов): у каждого класса своя роль в бою и своя «пушка-ответ».
+//  fast  — быстрее пилота, тонкие, бьют слабо: давят числом, лечатся площадью, цепями и аурами
+//  mid   — середина во всём: основа волны
+//  heavy — вдвое медленнее пилота, толстые, бьют больно и не отбрасываются: лечатся точечным уроном и пробиванием
+// Элитки — отдельный слой поверх любого среднего/тяжёлого врага (ELITE ниже).
+// Здоровье задаётся в «эталонных попаданиях» ENEMY_REF_HIT (удар базовой пушки новичка) и растёт со временем планеты,
+// поэтому соотношение классов держится весь забег, а не только первую минуту.
+export type EnemyClass = "fast" | "mid" | "heavy";
+export interface EnemyClassDef {
+  name: string;
+  hits: number; // здоровье в эталонных попаданиях
+  speed: number; // доля от базовой скорости пилота
+  damage: number; // урон касанием (на старте; растёт со временем)
+  kbResist: number;
+  xp: number;
+  grow: number; // доп. рост здоровья со временем планеты: × (1 + T × grow) — тяжёлые не тают к финалу
+}
+export const ENEMY_REF_HIT = 13;
+// быстрые после укуса отскакивают (скорость отброса, px/с)
+export const FAST_RECOIL = 380;
+export const ENEMY_CLASSES: Record<EnemyClass, EnemyClassDef> = {
+  fast: { name: "Быстрый", hits: 0.6, speed: 0.85, damage: 1.5, kbResist: 0, xp: 1, grow: 0 },
+  mid: { name: "Средний", hits: 2.5, speed: 0.4, damage: 6, kbResist: 0.25, xp: 3, grow: 0 },
+  heavy: { name: "Тяжёлый", hits: 12, speed: 0.33, damage: 18, kbResist: 0.9, xp: 14, grow: 1 / 900 },
+};
+// Элитка: жирная, бьёт больно, идёт на средней скорости и раз в несколько секунд делает рывок с замахом —
+// линия на земле показывает, куда. Уйти с линии — и есть позиционка.
+export const ELITE = {
+  hits: 25, // здоровье в эталонных попаданиях
+  rampT: 150, // первые элитки слабее: здоровье ×(0.5…1) до этого «времени планеты» — первая элитка учит, а не убивает
+  grow: 1 / 150, // доп. рост: первая элитка ~10 с, к финалу не тает за секунду
+  speed: 0.6, // доля скорости пилота — независимо от того, чей облик элитка взяла
+  damage: 15,
+  radiusMul: 1.6,
+  radiusMin: 22,
+  xp: 40,
+  lungeEvery: [5, 7] as [number, number], // с между рывками
+  lungeRange: 380, // рывок начинается, если пилот ближе
+  lungeWindup: 0.8, // замах: линия на земле
+  lungeTime: 0.42, // сам рывок
+  lungeSpeed: 4, // × скорость элитки во время рывка
+};
+
 export interface EnemyDef {
   id: string;
   name: string;
@@ -747,20 +790,57 @@ export interface EnemyDef {
   color: string;
   kind: EnemyKind;
   kbResist: number;
+  cls?: EnemyClass; // у боссов, гнёзд и контейнеров класса нет
   sprite?: string; // чей рисунок использовать (по умолчанию — id)
   planet?: string; // на какой планете встречается (для базы данных)
 }
 
+// Враг класса: hp/spd/dmg — множители внутри класса (индивидуальность без выхода за рамки роли)
+interface MobOpts {
+  r: number;
+  color: string;
+  kind?: EnemyKind;
+  hp?: number;
+  spd?: number;
+  dmg?: number;
+  xp?: number;
+  kb?: number; // своя устойчивость к отбросу
+  sprite?: string;
+  planet?: string;
+}
+function mob(id: string, name: string, cls: EnemyClass, o: MobOpts): EnemyDef {
+  const c = ENEMY_CLASSES[cls];
+  return {
+    id,
+    name,
+    cls,
+    hp: Math.round(ENEMY_REF_HIT * c.hits * (o.hp ?? 1)),
+    speed: Math.round(PLAYER_BASE_SPEED * c.speed * (o.spd ?? 1)),
+    damage: Math.round(c.damage * (o.dmg ?? 1) * 10) / 10,
+    radius: o.r,
+    xp: o.xp ?? c.xp,
+    color: o.color,
+    kind: o.kind ?? "chaser",
+    kbResist: o.kb ?? c.kbResist,
+    sprite: o.sprite,
+    planet: o.planet,
+  };
+}
+
 export const ENEMIES: Record<string, EnemyDef> = {
-  drone: { id: "drone", name: "Дрон-разведчик", hp: 7, speed: 70, damage: 5, radius: 12, xp: 1, color: "#f43f5e", kind: "chaser", kbResist: 0 },
-  swarm: { id: "swarm", name: "Наномошка", hp: 3, speed: 96, damage: 3, radius: 8, xp: 1, color: "#e879f9", kind: "chaser", kbResist: 0 },
-  trooper: { id: "trooper", name: "Киборг-пехотинец", hp: 26, speed: 58, damage: 8, radius: 15, xp: 2, color: "#fb923c", kind: "chaser", kbResist: 0.2 },
-  crawler: { id: "crawler", name: "Мутант-краулер", hp: 18, speed: 106, damage: 7, radius: 13, xp: 2, color: "#a3e635", kind: "chaser", kbResist: 0.1 },
-  gunner: { id: "gunner", name: "Бот-стрелок", hp: 30, speed: 52, damage: 7, radius: 15, xp: 3, color: "#facc15", kind: "gunner", kbResist: 0.2 },
-  kamikaze: { id: "kamikaze", name: "Дрон-камикадзе", hp: 12, speed: 145, damage: 18, radius: 12, xp: 2, color: "#ef4444", kind: "kamikaze", kbResist: 0 },
-  mech: { id: "mech", name: "Тяжёлый мех", hp: 140, speed: 42, damage: 15, radius: 25, xp: 7, color: "#f59e0b", kind: "chaser", kbResist: 0.7 },
-  phantom: { id: "phantom", name: "Фантом", hp: 45, speed: 84, damage: 10, radius: 14, xp: 3, color: "#67e8f9", kind: "phantom", kbResist: 0.3 },
-  brute: { id: "brute", name: "Штурмовой голем", hp: 320, speed: 46, damage: 22, radius: 30, xp: 14, color: "#c084fc", kind: "chaser", kbResist: 0.85 },
+  // быстрые
+  swarm: mob("swarm", "Наномошка", "fast", { r: 8, color: "#e879f9", hp: 0.8 }),
+  crawler: mob("crawler", "Мутант-краулер", "fast", { r: 13, color: "#a3e635", hp: 1.3, spd: 1.12, dmg: 1.4 }),
+  kamikaze: mob("kamikaze", "Дрон-камикадзе", "fast", { r: 12, color: "#ef4444", kind: "kamikaze", hp: 1.2, spd: 1.25, dmg: 7.2, xp: 2 }),
+  // средние
+  drone: mob("drone", "Дрон-разведчик", "mid", { r: 12, color: "#f43f5e", kb: 0, hp: 0.22, spd: 0.85, dmg: 0.7, xp: 1 }),
+  trooper: mob("trooper", "Киборг-пехотинец", "mid", { r: 15, color: "#fb923c" }),
+  gunner: mob("gunner", "Бот-стрелок", "mid", { r: 15, color: "#facc15", kind: "gunner", hp: 1.1, dmg: 1, xp: 4 }),
+  phantom: mob("phantom", "Фантом", "mid", { r: 14, color: "#67e8f9", kind: "phantom", hp: 1.5, spd: 1.2, dmg: 1.3, xp: 4 }),
+  // тяжёлые
+  mech: mob("mech", "Тяжёлый мех", "heavy", { r: 25, color: "#f59e0b" }),
+  brute: mob("brute", "Штурмовой голем", "heavy", { r: 30, color: "#c084fc", hp: 1.8, spd: 0.9, dmg: 1.3, xp: 24 }),
+
   crate: { id: "crate", name: "Контейнер снабжения", hp: 1, speed: 0, damage: 0, radius: 16, xp: 0, color: "#38bdf8", kind: "crate", kbResist: 1 },
   sentinel: { id: "sentinel", name: "СТРАЖ-01", hp: 2600, speed: 64, damage: 20, radius: 46, xp: 120, color: "#f43f5e", kind: "boss", kbResist: 1 },
   queen: { id: "queen", name: "КОРОЛЕВА УЛЬЯ", hp: 7000, speed: 52, damage: 26, radius: 54, xp: 220, color: "#d946ef", kind: "boss", kbResist: 1 },
@@ -770,23 +850,23 @@ export const ENEMIES: Record<string, EnemyDef> = {
   dreadnought: { id: "dreadnought", name: "ОСАДНЫЙ ДРЕДНОУТ", hp: 7000, speed: 50, damage: 26, radius: 58, xp: 220, color: "#f59e0b", kind: "boss", kbResist: 1, sprite: "sentinel", planet: "home" },
 
   // Крио-7
-  frost_drone: { id: "frost_drone", name: "Морозный дрон", hp: 8, speed: 72, damage: 5, radius: 12, xp: 1, color: "#7dd3fc", kind: "chaser", kbResist: 0, sprite: "drone", planet: "ice" },
-  snowmite: { id: "snowmite", name: "Снежный клещ", hp: 4, speed: 100, damage: 3, radius: 8, xp: 1, color: "#e0f2fe", kind: "chaser", kbResist: 0, sprite: "swarm", planet: "ice" },
-  cryo_trooper: { id: "cryo_trooper", name: "Криопехотинец", hp: 30, speed: 58, damage: 8, radius: 15, xp: 2, color: "#93c5fd", kind: "chaser", kbResist: 0.25, sprite: "trooper", planet: "ice" },
-  ice_crawler: { id: "ice_crawler", name: "Ледяной краулер", hp: 20, speed: 118, damage: 7, radius: 13, xp: 2, color: "#a5f3fc", kind: "chaser", kbResist: 0.1, sprite: "crawler", planet: "ice" },
-  frost_gunner: { id: "frost_gunner", name: "Крио-стрелок", hp: 32, speed: 52, damage: 7, radius: 15, xp: 3, color: "#bae6fd", kind: "gunner", kbResist: 0.2, sprite: "gunner", planet: "ice" },
-  ice_golem: { id: "ice_golem", name: "Ледяной голем", hp: 360, speed: 44, damage: 24, radius: 31, xp: 15, color: "#e0f2fe", kind: "chaser", kbResist: 0.85, sprite: "brute", planet: "ice" },
+  frost_drone: mob("frost_drone", "Морозный дрон", "mid", { r: 12, color: "#7dd3fc", kb: 0, hp: 0.25, spd: 0.85, dmg: 0.7, xp: 1, sprite: "drone", planet: "ice" }),
+  snowmite: mob("snowmite", "Снежный клещ", "fast", { r: 8, color: "#e0f2fe", hp: 0.9, sprite: "swarm", planet: "ice" }),
+  cryo_trooper: mob("cryo_trooper", "Криопехотинец", "mid", { r: 15, color: "#93c5fd", hp: 1.1, sprite: "trooper", planet: "ice" }),
+  ice_crawler: mob("ice_crawler", "Ледяной краулер", "fast", { r: 13, color: "#a5f3fc", hp: 1.4, spd: 1.15, dmg: 1.4, sprite: "crawler", planet: "ice" }),
+  frost_gunner: mob("frost_gunner", "Крио-стрелок", "mid", { r: 15, color: "#bae6fd", kind: "gunner", hp: 1.15, xp: 4, sprite: "gunner", planet: "ice" }),
+  ice_golem: mob("ice_golem", "Ледяной голем", "heavy", { r: 31, color: "#e0f2fe", hp: 1.9, spd: 0.9, dmg: 1.35, xp: 25, sprite: "brute", planet: "ice" }),
 
   // Улей Ксенос
-  xeno_drone: { id: "xeno_drone", name: "Ксено-трутень", hp: 9, speed: 76, damage: 6, radius: 12, xp: 1, color: "#84cc16", kind: "chaser", kbResist: 0, sprite: "drone", planet: "hive" },
-  larva: { id: "larva", name: "Личинка", hp: 4, speed: 112, damage: 3, radius: 8, xp: 1, color: "#bef264", kind: "chaser", kbResist: 0, sprite: "swarm", planet: "hive" },
-  xeno_warrior: { id: "xeno_warrior", name: "Ксено-воин", hp: 32, speed: 62, damage: 9, radius: 15, xp: 2, color: "#65a30d", kind: "chaser", kbResist: 0.2, sprite: "trooper", planet: "hive" },
-  xeno_crawler: { id: "xeno_crawler", name: "Ползун", hp: 22, speed: 120, damage: 8, radius: 13, xp: 2, color: "#a3e635", kind: "chaser", kbResist: 0.1, sprite: "crawler", planet: "hive" },
-  spitter: { id: "spitter", name: "Плевун", hp: 34, speed: 54, damage: 8, radius: 15, xp: 3, color: "#d9f99d", kind: "gunner", kbResist: 0.2, sprite: "gunner", planet: "hive" },
-  bloater: { id: "bloater", name: "Пузырь", hp: 14, speed: 140, damage: 20, radius: 13, xp: 2, color: "#eab308", kind: "kamikaze", kbResist: 0, sprite: "kamikaze", planet: "hive" },
-  carapace: { id: "carapace", name: "Панцирник", hp: 160, speed: 44, damage: 16, radius: 25, xp: 7, color: "#4d7c0f", kind: "chaser", kbResist: 0.7, sprite: "mech", planet: "hive" },
-  stalker: { id: "stalker", name: "Охотник", hp: 50, speed: 88, damage: 11, radius: 14, xp: 3, color: "#4ade80", kind: "phantom", kbResist: 0.3, sprite: "phantom", planet: "hive" },
-  xeno_brute: { id: "xeno_brute", name: "Ксено-громила", hp: 380, speed: 48, damage: 25, radius: 31, xp: 15, color: "#3f6212", kind: "chaser", kbResist: 0.85, sprite: "brute", planet: "hive" },
+  xeno_drone: mob("xeno_drone", "Ксено-трутень", "mid", { r: 12, color: "#84cc16", kb: 0, hp: 0.28, spd: 0.9, dmg: 0.8, xp: 1, sprite: "drone", planet: "hive" }),
+  larva: mob("larva", "Личинка", "fast", { r: 8, color: "#bef264", hp: 0.9, spd: 1.05, sprite: "swarm", planet: "hive" }),
+  xeno_warrior: mob("xeno_warrior", "Ксено-воин", "mid", { r: 15, color: "#65a30d", hp: 1.15, dmg: 1.1, sprite: "trooper", planet: "hive" }),
+  xeno_crawler: mob("xeno_crawler", "Ползун", "fast", { r: 13, color: "#a3e635", hp: 1.5, spd: 1.15, dmg: 1.6, sprite: "crawler", planet: "hive" }),
+  spitter: mob("spitter", "Плевун", "mid", { r: 15, color: "#d9f99d", kind: "gunner", hp: 1.2, dmg: 1.1, xp: 4, sprite: "gunner", planet: "hive" }),
+  bloater: mob("bloater", "Пузырь", "fast", { r: 13, color: "#eab308", kind: "kamikaze", hp: 1.4, spd: 1.2, dmg: 8, xp: 2, sprite: "kamikaze", planet: "hive" }),
+  carapace: mob("carapace", "Панцирник", "heavy", { r: 25, color: "#4d7c0f", hp: 1.15, dmg: 1.05, sprite: "mech", planet: "hive" }),
+  stalker: mob("stalker", "Охотник", "mid", { r: 14, color: "#4ade80", kind: "phantom", hp: 1.6, spd: 1.25, dmg: 1.4, xp: 4, sprite: "phantom", planet: "hive" }),
+  xeno_brute: mob("xeno_brute", "Ксено-громила", "heavy", { r: 31, color: "#3f6212", hp: 2, spd: 0.95, dmg: 1.4, xp: 26, sprite: "brute", planet: "hive" }),
   nest: { id: "nest", name: "Гнездо", hp: 260, speed: 0, damage: 0, radius: 28, xp: 20, color: "#a3e635", kind: "nest", kbResist: 1, planet: "hive" },
   hive_mother: { id: "hive_mother", name: "ПРАМАТЕРЬ КСЕНОС", hp: 30000, speed: 50, damage: 36, radius: 72, xp: 0, color: "#84cc16", kind: "boss", kbResist: 1, sprite: "queen", planet: "hive" },
 };
@@ -799,24 +879,20 @@ export interface Wave {
   pool: [string, number][];
 }
 
+// Волны собираются из классов (неделя врагов): старт — средние и рой, середина — пехота + первые тяжёлые,
+// финал — всё вместе: рой окружает, тяжёлые перекрывают проходы. t — «старое» 15-минутное время (см. planets.ts remap).
 export const WAVES: Wave[] = [
   { t: 0, min: 8, interval: 1.6, batch: 1, pool: [["drone", 1]] },
-  { t: 40, min: 18, interval: 1.2, batch: 2, pool: [["drone", 3], ["swarm", 2]] },
-  { t: 90, min: 28, interval: 1.0, batch: 2, pool: [["drone", 2], ["swarm", 2], ["trooper", 1]] },
-  { t: 150, min: 40, interval: 0.9, batch: 3, pool: [["swarm", 3], ["trooper", 2], ["crawler", 2]] },
-  { t: 210, min: 50, interval: 0.85, batch: 3, pool: [["trooper", 2], ["crawler", 3], ["gunner", 1]] },
-  { t: 270, min: 60, interval: 0.8, batch: 4, pool: [["crawler", 2], ["trooper", 2], ["gunner", 1], ["kamikaze", 1]] },
-  { t: 330, min: 70, interval: 0.75, batch: 4, pool: [["trooper", 3], ["mech", 1], ["swarm", 4]] },
-  { t: 390, min: 85, interval: 0.7, batch: 5, pool: [["mech", 1], ["kamikaze", 2], ["gunner", 1], ["crawler", 3]] },
-  { t: 450, min: 95, interval: 0.65, batch: 5, pool: [["phantom", 2], ["trooper", 2], ["swarm", 4]] },
-  { t: 510, min: 110, interval: 0.65, batch: 6, pool: [["phantom", 2], ["mech", 1], ["kamikaze", 2], ["crawler", 2]] },
-  { t: 570, min: 120, interval: 0.6, batch: 6, pool: [["phantom", 3], ["gunner", 2], ["swarm", 5]] },
-  { t: 630, min: 135, interval: 0.6, batch: 7, pool: [["brute", 1], ["trooper", 3], ["crawler", 3], ["kamikaze", 2]] },
-  { t: 690, min: 150, interval: 0.55, batch: 7, pool: [["brute", 1], ["phantom", 3], ["mech", 2], ["swarm", 4]] },
-  { t: 750, min: 165, interval: 0.55, batch: 8, pool: [["brute", 2], ["gunner", 2], ["phantom", 3], ["kamikaze", 3]] },
-  { t: 810, min: 185, interval: 0.5, batch: 8, pool: [["brute", 2], ["mech", 2], ["phantom", 3], ["crawler", 4]] },
-  { t: 870, min: 200, interval: 0.45, batch: 9, pool: [["brute", 2], ["mech", 2], ["phantom", 4], ["swarm", 6], ["kamikaze", 2]] },
-  { t: 900, min: 70, interval: 0.8, batch: 3, pool: [["phantom", 2], ["swarm", 4], ["kamikaze", 1]] },
+  { t: 40, min: 16, interval: 1.3, batch: 2, pool: [["drone", 3], ["swarm", 2]] },
+  { t: 90, min: 26, interval: 1.05, batch: 2, pool: [["drone", 2], ["swarm", 3], ["trooper", 2]] },
+  { t: 150, min: 34, interval: 0.95, batch: 3, pool: [["swarm", 3], ["trooper", 3], ["crawler", 2], ["mech", 0.4]] },
+  { t: 210, min: 42, interval: 0.9, batch: 3, pool: [["trooper", 3], ["crawler", 3], ["swarm", 2], ["gunner", 1], ["mech", 0.7]] },
+  { t: 270, min: 50, interval: 0.85, batch: 4, pool: [["trooper", 3], ["crawler", 2], ["swarm", 3], ["gunner", 1], ["kamikaze", 1], ["mech", 1]] },
+  { t: 330, min: 58, interval: 0.8, batch: 4, pool: [["swarm", 4], ["trooper", 3], ["crawler", 2], ["phantom", 1], ["mech", 1.3]] },
+  { t: 390, min: 66, interval: 0.75, batch: 4, pool: [["swarm", 4], ["trooper", 2], ["crawler", 3], ["kamikaze", 1], ["gunner", 1], ["mech", 1.3], ["brute", 0.5]] },
+  { t: 450, min: 75, interval: 0.7, batch: 5, pool: [["swarm", 5], ["trooper", 3], ["crawler", 3], ["phantom", 2], ["mech", 1.5], ["brute", 0.8]] },
+  { t: 510, min: 85, interval: 0.65, batch: 5, pool: [["swarm", 5], ["trooper", 3], ["phantom", 2], ["kamikaze", 2], ["gunner", 1], ["mech", 1.5], ["brute", 1]] },
+  { t: 900, min: 80, interval: 0.7, batch: 4, pool: [["swarm", 5], ["trooper", 3], ["phantom", 2], ["kamikaze", 1], ["mech", 1.5], ["brute", 1]] },
 ];
 
 export type GameEventType = "elite" | "ring" | "rush" | "boss" | "blizzard" | "nest";
