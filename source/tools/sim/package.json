@@ -1,0 +1,9 @@
+{
+  "name": "neon-survivors-sim",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "sim": "esbuild sim.ts --bundle --platform=node --outfile=out/sim.js --log-level=error && node out/sim.js"
+  },
+  "devDependencies": { "esbuild": "^0.25.0" }
+}
